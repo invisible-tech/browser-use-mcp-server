@@ -31,7 +31,6 @@ import uvicorn
 
 # Browser-use library imports
 from browser_use import Agent, BrowserSession, BrowserProfile
-from browser_use.browser.browser import Browser, BrowserConfig
 from dotenv import load_dotenv
 from langchain_core.language_models import BaseLanguageModel
 
@@ -207,7 +206,7 @@ async def run_browser_task_async(
     url: str,
     action: str,
     llm: BaseLanguageModel,
-    sensitive_data: Dict[str, str] | None = None,
+    sensitive_data: dict[str, str] | None = None,
 
     window_width: int = CONFIG["DEFAULT_WINDOW_WIDTH"],
     window_height: int = CONFIG["DEFAULT_WINDOW_HEIGHT"],
