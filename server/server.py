@@ -30,9 +30,8 @@ import mcp.types as types
 import uvicorn
 
 # Browser-use library imports
-from browser_use import Agent
+from browser_use import Agent, BrowserSession, BrowserProfile
 from browser_use.browser.browser import Browser, BrowserConfig
-from browser_use.browser.context import BrowserContext, BrowserContextConfig
 from dotenv import load_dotenv
 from langchain_core.language_models import BaseLanguageModel
 
@@ -45,6 +44,7 @@ from mcp.server.sse import SseServerTransport
 from pythonjsonlogger import jsonlogger
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
+from utils.twofa import controller
 
 # Configure logging
 logger = logging.getLogger()
@@ -138,16 +138,16 @@ CONFIG = init_configuration()
 task_store: Dict[str, Dict[str, Any]] = {}
 
 
-async def create_browser_context_for_task(
+async def create_browser_session_for_task(
     chrome_path: Optional[str] = None,
     window_width: int = CONFIG["DEFAULT_WINDOW_WIDTH"],
     window_height: int = CONFIG["DEFAULT_WINDOW_HEIGHT"],
     locale: str = CONFIG["DEFAULT_LOCALE"],
-) -> Tuple[Browser, BrowserContext]:
+) -> BrowserSession:
     """
-    Create a fresh browser and context for a task.
+    Create a fresh browser and session for a task.
 
-    This function creates an isolated browser instance and context
+    This function creates an isolated browser instance and session
     with proper configuration for a single task.
 
     Args:
@@ -157,42 +157,48 @@ async def create_browser_context_for_task(
         locale: Browser locale
 
     Returns:
-        A tuple containing the browser instance and browser context
+        A tuple containing the browser instance and browser session
 
     Raises:
-        Exception: If browser or context creation fails
+        Exception: If browser or session creation fails
     """
     try:
-        # Create browser configuration
-        browser_config = BrowserConfig(
-            extra_chromium_args=CONFIG["BROWSER_ARGS"],
-        )
-
-        # Set chrome path if provided
-        if chrome_path:
-            browser_config.chrome_instance_path = chrome_path
-
-        # Create browser instance
-        browser = Browser(config=browser_config)
-
-        # Create context configuration
-        context_config = BrowserContextConfig(
+        # Create session configuration
+        browser_profile = BrowserProfile(
             wait_for_network_idle_page_load_time=0.6,
             maximum_wait_page_load_time=1.2,
             minimum_wait_page_load_time=0.2,
-            browser_window_size={"width": window_width, "height": window_height},
+            window_size={"width": window_width, "height": window_height},
+            viewport={"width": window_width, "height": window_height},
             locale=locale,
             user_agent=CONFIG["DEFAULT_USER_AGENT"],
             highlight_elements=True,
             viewport_expansion=0,
+            chromium_sandbox=False,
+        )
+        
+
+        # Create session with the browser
+        session = BrowserSession(
+            browser_profile=browser_profile,
+            headless=True,
+            browser_args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--no-first-run',
+                '--disable-default-apps',
+                '--disable-extensions-except=',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-features=TranslateUI',
+                '--disable-ipc-flooding-protection'
+            ]
         )
 
-        # Create context with the browser
-        context = BrowserContext(browser=browser, config=context_config)
-
-        return browser, context
+        return session
     except Exception as e:
-        logger.error(f"Error creating browser context: {str(e)}")
+        logger.error(f"Error creating browser session: {str(e)}")
         raise
 
 
@@ -201,6 +207,8 @@ async def run_browser_task_async(
     url: str,
     action: str,
     llm: BaseLanguageModel,
+    sensitive_data: Dict[str, str] | None = None,
+
     window_width: int = CONFIG["DEFAULT_WINDOW_WIDTH"],
     window_height: int = CONFIG["DEFAULT_WINDOW_HEIGHT"],
     locale: str = CONFIG["DEFAULT_LOCALE"],
@@ -218,13 +226,13 @@ async def run_browser_task_async(
         task_id: Unique identifier for the task
         url: URL to navigate to
         action: Action to perform after navigation
+        sensitive_data: Sensitive data to use for the task
         llm: Language model to use for browser agent
         window_width: Browser window width
         window_height: Browser window height
         locale: Browser locale
     """
-    browser = None
-    context = None
+    session = None
 
     try:
         # Update task status to running
@@ -278,19 +286,33 @@ async def run_browser_task_async(
         # Get Chrome path from environment if available
         chrome_path = os.environ.get("CHROME_PATH")
 
-        # Create a fresh browser and context for this task
-        browser, context = await create_browser_context_for_task(
+        # Create a fresh browser and session for this task
+        session = await create_browser_session_for_task(
             chrome_path=chrome_path,
             window_width=window_width,
             window_height=window_height,
             locale=locale,
         )
 
-        # Create agent with the fresh context
+        action = f"""
+                {action}\n\n\n
+                Considerations:
+                - NEVER hallucinate login credentials.
+                - ALWAYS use the get_otp_2fa action to retrieve the 2FA code if needed.
+                - NEVER skip the 2FA step if the page requires it.
+                - NEVER extract the code from the page.
+                - NEVER use a code that is not generated by the get_otp_2fa action.
+                - NEVER hallucinate the 2FA code, always use the get_otp_2fa action to get it.
+            """
+
+        # Create agent with the fresh session
         agent = Agent(
             task=f"First, navigate to {url}. Then, {action}",
             llm=llm,
-            browser_context=context,
+            sensitive_data=sensitive_data,
+            use_vision=False,
+            browser_session=session,
+            controller=controller,
             register_new_step_callback=step_callback,
             register_done_callback=done_callback,
         )
@@ -349,10 +371,8 @@ async def run_browser_task_async(
     finally:
         # Clean up browser resources
         try:
-            if context:
-                await context.close()
-            if browser:
-                await browser.close()
+            if session:
+                await session.close()
             logger.info(f"Browser resources for task {task_id} cleaned up")
         except Exception as e:
             logger.error(
@@ -467,6 +487,7 @@ def create_mcp_server(
                     url=arguments["url"],
                     action=arguments["action"],
                     llm=llm,
+                    sensitive_data=arguments.get("sensitive_data", None),
                     window_width=window_width,
                     window_height=window_height,
                     locale=locale,
@@ -608,6 +629,13 @@ def create_mcp_server(
                                 "type": "string",
                                 "description": "Action to perform in the browser",
                             },
+                            "sensitive_data": {
+                                "type": "object",
+                                "description": "Dictionary of sensitive data to use for the task (e.g. credentials)",
+                                "additionalProperties": {
+                                    "type": "string"
+                                }
+                            },
                         },
                     },
                 ),
@@ -643,6 +671,13 @@ def create_mcp_server(
                                 "type": "string",
                                 "description": "Action to perform in the browser",
                             },
+                            "sensitive_data": {
+                                "type": "object",
+                                "description": "Dictionary of sensitive data to use for the task (e.g. credentials)",
+                                "additionalProperties": {
+                                    "type": "string"
+                                }
+                            },
                         },
                     },
                 ),
@@ -656,7 +691,14 @@ def create_mcp_server(
                             "task_id": {
                                 "type": "string",
                                 "description": "ID of the task to get results for",
-                            }
+                            },
+                            "sensitive_data": {
+                                "type": "object",
+                                "description": "Dictionary of sensitive data to use for the task (e.g. credentials)",
+                                "additionalProperties": {
+                                    "type": "string"
+                                }
+                            },
                         },
                     },
                 ),
@@ -772,7 +814,7 @@ def main(
     Run the browser-use MCP server.
 
     This function initializes the MCP server and runs it with the SSE transport.
-    Each browser task will create its own isolated browser context.
+    Each browser task will create its own isolated browser session.
 
     The server can run in two modes:
     1. Direct SSE mode (default): Just runs the SSE server

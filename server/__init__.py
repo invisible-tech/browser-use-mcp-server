@@ -8,7 +8,7 @@ from .server import (
     CONFIG,
     Server,
     cleanup_old_tasks,
-    create_browser_context_for_task,
+    create_browser_session_for_task,
     create_mcp_server,
     init_configuration,
     main,
@@ -19,7 +19,7 @@ from .server import (
 __all__ = [
     "Server",
     "main",
-    "create_browser_context_for_task",
+    "create_browser_session_for_task",
     "run_browser_task_async",
     "cleanup_old_tasks",
     "create_mcp_server",
