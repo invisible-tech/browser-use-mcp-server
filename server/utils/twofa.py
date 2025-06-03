@@ -15,16 +15,26 @@ from browser_use import ActionResult, Controller
 controller = Controller()
 
 
-@controller.registry.action('Get 2FA code from when OTP is required')
-async def get_otp_2fa() -> ActionResult:
+@controller.registry.action('Get 2FA code from OTP secret key')
+async def get_otp_2fa(otp_secret_key: str | None = None) -> ActionResult:
 	"""
 	Custom action to retrieve 2FA/MFA code from OTP secret key using pyotp.
-	The OTP secret key should be set in the environment variable OTP_SECRET_KEY.
+	
+	Args:
+		otp_secret_key: The OTP secret key to generate the code for
+		
+	Returns:
+		ActionResult containing the generated OTP code
+		
+	Raises:
+		ValueError: If otp_secret_key is not provided or is empty
 	"""
-	secret_key = os.environ.get('OTP_SECRET_KEY', None)
-	if not secret_key:
-		raise ValueError('OTP_SECRET_KEY environment variable is not set')
-
-	totp = pyotp.TOTP(secret_key)
-	code = totp.now()
-	return ActionResult(extracted_content=code)
+	if not otp_secret_key:
+		raise ValueError('otp_secret_key parameter is required')
+	try:
+		totp = pyotp.TOTP(otp_secret_key)
+		code = totp.now()
+		return ActionResult(extracted_content=code)
+	except Exception as e:
+		print(f"Error generating OTP code")
+		raise ValueError(f"Error generating OTP code")
