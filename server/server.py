@@ -28,6 +28,9 @@ from typing import Any, Dict, Optional, Tuple, Union
 import click
 import mcp.types as types
 import uvicorn
+from starlette.applications import Starlette
+from starlette.routing import Mount, Route
+from starlette.responses import JSONResponse
 
 # Browser-use library imports
 from browser_use import Agent, BrowserSession, BrowserProfile
@@ -41,8 +44,6 @@ from langchain_openai import ChatOpenAI
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from pythonjsonlogger import jsonlogger
-from starlette.applications import Starlette
-from starlette.routing import Mount, Route
 from utils.twofa import controller
 
 # Configure logging
@@ -869,9 +870,20 @@ def main(
             logger.error(f"Error in handle_sse: {str(e)}")
             raise
 
+    async def health_check(request):
+        """Handle health check requests."""
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "timestamp": datetime.now().isoformat(),
+            },
+            status_code=200
+        )
+
     starlette_app = Starlette(
         debug=True,
         routes=[
+            Route("/health", endpoint=health_check),
             Route("/sse", endpoint=handle_sse),
             Mount("/messages/", app=sse.handle_post_message),
         ],
