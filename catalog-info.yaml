@@ -19,7 +19,7 @@ metadata:
     serverless: No
     knowledge_base: Notion
 spec:
-  type: internal-tool
+  type: internal tool
   lifecycle: production
   owner: axon
   domain: agentic-platform
